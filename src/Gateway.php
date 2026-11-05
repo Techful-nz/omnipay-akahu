@@ -12,6 +12,7 @@ use Omnipay\Akahu\Message\PurchaseRequest;
 use Omnipay\Akahu\Message\VoidRequest;
 use Omnipay\Common\AbstractGateway;
 use Omnipay\Common\Message\RequestInterface;
+use Psr\SimpleCache\CacheInterface;
 
 /**
  * Akahu pay-by-bank (one-off payments) gateway.
@@ -100,6 +101,28 @@ class Gateway extends AbstractGateway
     public function getWebhookPublicKeys(): ?array
     {
         return $this->getParameter('webhookPublicKeys');
+    }
+
+    /** A PSR-16 cache for fetched webhook public keys, shared across processes. */
+    public function setWebhookKeyCache(?CacheInterface $value): static
+    {
+        return $this->setParameter('webhookKeyCache', $value);
+    }
+
+    public function getWebhookKeyCache(): ?CacheInterface
+    {
+        return $this->getParameter('webhookKeyCache');
+    }
+
+    /** How long to keep keys in webhookKeyCache, in seconds (null: the cache's default). */
+    public function setWebhookKeyCacheTtl(?int $value): static
+    {
+        return $this->setParameter('webhookKeyCacheTtl', $value);
+    }
+
+    public function getWebhookKeyCacheTtl(): ?int
+    {
+        return $this->getParameter('webhookKeyCacheTtl');
     }
 
     /** Create a one-off payment. The response redirects the user to Akahu. */

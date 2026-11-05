@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Omnipay\Akahu\Message;
 
 use Omnipay\Common\Exception\InvalidRequestException;
+use Psr\SimpleCache\CacheInterface;
 
 /**
  * Verify and parse a one-off payment webhook.
@@ -78,6 +79,28 @@ class AcceptNotificationRequest extends AbstractRequest
         return $this->getParameter('webhookPublicKeys');
     }
 
+    /** A PSR-16 cache for fetched webhook public keys, shared across processes. */
+    public function setWebhookKeyCache(?CacheInterface $value): static
+    {
+        return $this->setParameter('webhookKeyCache', $value);
+    }
+
+    public function getWebhookKeyCache(): ?CacheInterface
+    {
+        return $this->getParameter('webhookKeyCache');
+    }
+
+    /** How long to keep keys in webhookKeyCache, in seconds (null: the cache's default). */
+    public function setWebhookKeyCacheTtl(?int $value): static
+    {
+        return $this->setParameter('webhookKeyCacheTtl', $value);
+    }
+
+    public function getWebhookKeyCacheTtl(): ?int
+    {
+        return $this->getParameter('webhookKeyCacheTtl');
+    }
+
     public function getData(): array
     {
         $body = $this->getBody();
@@ -119,18 +142,26 @@ class AcceptNotificationRequest extends AbstractRequest
             return $known[$keyId];
         }
 
-        $cacheKey = $this->getEndpoint() . '|' . $keyId;
+        $cacheKey = 'akahu_webhook_key_' . sha1($this->getEndpoint() . '|' . $keyId);
 
-        if (!isset(self::$keyCache[$cacheKey])) {
+        if (isset(self::$keyCache[$cacheKey])) {
+            return self::$keyCache[$cacheKey];
+        }
+
+        $cache = $this->getWebhookKeyCache();
+        $publicKey = $cache?->get($cacheKey);
+
+        if (!is_string($publicKey) || $publicKey === '') {
             $result = $this->sendApiRequest('GET', '/webhooks/keys/' . rawurlencode($keyId));
 
             if ($result['status'] !== 200 || empty($result['body']['publicKey'])) {
                 throw new InvalidRequestException(sprintf('Could not fetch webhook signing key "%s".', $keyId));
             }
 
-            self::$keyCache[$cacheKey] = $result['body']['publicKey'];
+            $publicKey = $result['body']['publicKey'];
+            $cache?->set($cacheKey, $publicKey, $this->getWebhookKeyCacheTtl());
         }
 
-        return self::$keyCache[$cacheKey];
+        return self::$keyCache[$cacheKey] = $publicKey;
     }
 }

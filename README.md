@@ -164,13 +164,85 @@ For the full payment (amount, payer details and so on), call `$gateway->fetchTra
 
 If you leave out `body`, `signature` or `signingKey`, the value is read from the gateway's HTTP request instead, which Omnipay builds from PHP globals by default. That means a bare `acceptNotification()->send()` also works, but passing the values in makes it clear where they come from and is easier to test.
 
-To avoid fetching keys over HTTP (e.g. you cache them yourself), pass them in:
+Fetched public keys are cached in memory for the life of the PHP process. To share them across processes, give the gateway a PSR-16 cache. To skip fetching altogether, pass the keys in:
 
 ```php
+$gateway->setWebhookKeyCache($psr16Cache);   // any Psr\SimpleCache\CacheInterface
+$gateway->setWebhookKeyCacheTtl(86400);      // seconds
+
 $gateway->setWebhookPublicKeys(['key_id' => $pem]);
 ```
 
 The `status_reason` message is for your logs, not for end users.
+
+## Laravel
+
+Laravel auto-discovers the service provider (`Omnipay\Akahu\Laravel\AkahuServiceProvider`). Add your credentials to `.env`:
+
+```dotenv
+AKAHU_APP_TOKEN=app_token_...
+AKAHU_APP_SECRET=...
+AKAHU_PAYEE_NAME="Acme Ltd"
+AKAHU_PAYEE_ACCOUNT_NUMBER=12-3456-7890123-00
+```
+
+To customise the config, publish it to `config/akahu.php`:
+
+```bash
+php artisan vendor:publish --tag=akahu-config
+```
+
+Type-hint `Omnipay\Akahu\Gateway` to get a configured gateway. Laravel builds one per request, using the current request, and caches webhook keys in your cache store (set with `AKAHU_WEBHOOK_KEY_CACHE_STORE`; the default store if unset).
+
+```php
+use Illuminate\Http\Request;
+use Omnipay\Akahu\Gateway;
+use Omnipay\Common\Exception\InvalidRequestException;
+
+class AkahuController
+{
+    public function checkout(Order $order, Gateway $akahu)
+    {
+        $response = $akahu->purchase([
+            'amount' => $order->total,
+            'returnUrl' => route('akahu.return', $order),
+            'notifyUrl' => route('akahu.webhook'),
+            'payeeReference' => "INV-{$order->id}",
+        ])->send();
+
+        abort_unless($response->isRedirect(), 422, $response->getMessage());
+
+        $order->update(['akahu_payment_id' => $response->getTransactionReference()]);
+
+        return redirect()->away($response->getRedirectUrl());
+    }
+
+    public function webhook(Request $request, Gateway $akahu)
+    {
+        try {
+            $notification = $akahu->acceptNotification([
+                'body' => $request->getContent(),
+                'signature' => $request->header('X-Akahu-Payments-Signature'),
+                'signingKey' => $request->header('X-Akahu-Payments-Signing-Key'),
+            ])->send();
+        } catch (InvalidRequestException) {
+            abort(400);
+        }
+
+        // ... update the order as in the webhook example above
+
+        return response()->noContent();
+    }
+}
+```
+
+Exclude the webhook route from CSRF protection. In Laravel 11 and later, add this to `bootstrap/app.php`:
+
+```php
+->withMiddleware(function (Middleware $middleware) {
+    $middleware->validateCsrfTokens(except: ['webhooks/akahu']);
+})
+```
 
 ## Testing with the Demo Bank
 

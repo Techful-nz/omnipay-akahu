@@ -142,6 +142,38 @@ class AcceptNotificationRequestTest extends TestCase
         $this->assertSame('https://api.payments.akahu.io/v1/webhooks/keys/key_fetch', (string) $requests[0]->getUri());
     }
 
+    public function testUsesPsr16CacheForPublicKeys(): void
+    {
+        $cache = new \Illuminate\Cache\Repository(new \Illuminate\Cache\ArrayStore());
+        $this->getMockClient()->addResponse(new Response(200, ['Content-Type' => 'application/json'], json_encode([
+            'keyId' => 'key_psr16',
+            'publicKey' => self::$publicKey,
+        ])));
+
+        $body = $this->body('SENT');
+        $request = $this->makeRequest($body, $this->sign($body), 'key_psr16');
+        $request->setWebhookKeyCache($cache)->setWebhookKeyCacheTtl(60);
+
+        $this->assertTrue($request->send()->isSuccessful());
+        $this->assertSame(
+            self::$publicKey,
+            $cache->get('akahu_webhook_key_' . sha1('https://api.payments.akahu.io/v1|key_psr16')),
+        );
+    }
+
+    public function testReadsPublicKeyFromPsr16Cache(): void
+    {
+        $cache = new \Illuminate\Cache\Repository(new \Illuminate\Cache\ArrayStore());
+        $cache->set('akahu_webhook_key_' . sha1('https://api.payments.akahu.io/v1|key_cached'), self::$publicKey);
+
+        $body = $this->body('SENT');
+        $request = $this->makeRequest($body, $this->sign($body), 'key_cached');
+        $request->setWebhookKeyCache($cache);
+
+        $this->assertTrue($request->send()->isSuccessful());
+        $this->assertCount(0, $this->getMockedRequests());
+    }
+
     public function testPendingStatus(): void
     {
         $body = $this->body('SUBMITTED', 'PENDING');
