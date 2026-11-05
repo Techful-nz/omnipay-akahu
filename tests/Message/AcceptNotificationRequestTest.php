@@ -55,6 +55,56 @@ class AcceptNotificationRequestTest extends TestCase
         ]));
     }
 
+    private function makeExplicitRequest(array $parameters): AcceptNotificationRequest
+    {
+        // An empty HTTP request: everything must come from the parameters.
+        $request = new AcceptNotificationRequest($this->getHttpClient(), new HttpRequest());
+        $request->initialize($parameters + [
+            'appToken' => 'app_token_test',
+            'appSecret' => 'secret_test',
+            'webhookPublicKeys' => ['key_1' => self::$publicKey],
+        ]);
+
+        return $request;
+    }
+
+    public function testExplicitParameters(): void
+    {
+        $body = $this->body('SENT');
+
+        $notification = $this->makeExplicitRequest([
+            'body' => $body,
+            'signature' => $this->sign($body),
+            'signingKey' => 'key_1',
+        ])->send();
+
+        $this->assertTrue($notification->isSuccessful());
+        $this->assertSame('one_off_payment_c01234567890123456789012345', $notification->getTransactionReference());
+    }
+
+    public function testExplicitParametersOverrideHttpRequest(): void
+    {
+        $body = $this->body('SENT');
+        $request = $this->makeRequest('{"tampered":true}', 'bm90LWEtc2lnbmF0dXJl', 'other_key');
+        $request->initialize([
+            'appToken' => 'app_token_test',
+            'appSecret' => 'secret_test',
+            'webhookPublicKeys' => ['key_1' => self::$publicKey],
+            'body' => $body,
+            'signature' => $this->sign($body),
+            'signingKey' => 'key_1',
+        ]);
+
+        $this->assertSame('SENT', $request->send()->getStatus());
+    }
+
+    public function testExplicitParametersMissingSignature(): void
+    {
+        $this->expectException(InvalidRequestException::class);
+
+        $this->makeExplicitRequest(['body' => $this->body('SENT'), 'signingKey' => 'key_1'])->send();
+    }
+
     public function testValidSignatureWithSuppliedKey(): void
     {
         $body = $this->body('SENT');

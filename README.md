@@ -103,32 +103,66 @@ A payment is often still `SUBMITTED` when the customer returns, so don't treat p
 
 ## 3. Webhooks
 
-Akahu POSTs to `notifyUrl` on every status change and signs the raw body with RSA-SHA256. `acceptNotification()` reads the request's `X-Akahu-Payments-Signature` and `X-Akahu-Payments-Signing-Key` headers, fetches the public key from Akahu (cached per process), and verifies the signature. It throws `InvalidRequestException` if verification fails.
+Akahu sends a POST to your `notifyUrl` whenever a payment's status changes. The payment ID is in the JSON body, so you don't pass one to `acceptNotification()`:
+
+```http
+POST /webhooks/akahu
+X-Akahu-Payments-Signature: <base64 RSA-SHA256 signature of the body>
+X-Akahu-Payments-Signing-Key: <key id>
+
+{
+  "type": "ONE_OFF_PAYMENT_STATUS_UPDATE",
+  "_payment": "one_off_payment_c01234567890123456789012345",
+  "status": "SENT",
+  "emitted_at": "2026-11-05T03:05:00.000Z"
+}
+```
+
+Pass the raw body and the two headers to `acceptNotification()`. `send()` then:
+
+1. Fetches Akahu's public key for the signing-key header and caches it for the life of the PHP process.
+2. Verifies the signature over the raw body. It throws `InvalidRequestException` if verification fails.
+3. Returns a `Notification`. `getTransactionReference()` returns `_payment`, the same ID that `purchase()` gave you.
 
 ```php
 use Omnipay\Common\Exception\InvalidRequestException;
 use Omnipay\Common\Message\NotificationInterface;
 
+// In your webhook endpoint (the notifyUrl). $request is the incoming request,
+// e.g. Symfony/Laravel; with plain PHP use file_get_contents('php://input')
+// and $_SERVER['HTTP_X_AKAHU_PAYMENTS_SIGNATURE'] / ['HTTP_X_AKAHU_PAYMENTS_SIGNING_KEY'].
 try {
-    $notification = $gateway->acceptNotification()->send();
+    $notification = $gateway->acceptNotification([
+        'body' => $request->getContent(),   // the raw body, before any JSON decoding
+        'signature' => $request->headers->get('X-Akahu-Payments-Signature'),
+        'signingKey' => $request->headers->get('X-Akahu-Payments-Signing-Key'),
+    ])->send();
 } catch (InvalidRequestException $e) {
-    http_response_code(400);
+    http_response_code(400);   // bad or missing signature: ignore it
     exit;
 }
 
-$order = Order::findByAkahuId($notification->getTransactionReference());
+// Look up the order using the payment ID you stored after purchase().
+$paymentId = $notification->getTransactionReference();   // "one_off_payment_..."
+$order = Order::where('akahu_payment_id', $paymentId)->firstOrFail();
 
-// Webhooks may arrive out of order.
+// Webhooks can arrive out of order, so skip anything older than the last update.
 if ($notification->getEmittedAt() > $order->akahu_updated_at) {
     match ($notification->getTransactionStatus()) {
-        NotificationInterface::STATUS_COMPLETED => $order->markPaid(),
-        NotificationInterface::STATUS_FAILED => $order->markFailed($notification->getCode()),
-        default => null,
+        NotificationInterface::STATUS_COMPLETED => $order->markPaid(),                          // SENT
+        NotificationInterface::STATUS_FAILED => $order->markFailed($notification->getCode()),  // CANCELLED or FAILED
+        default => null,                                                                       // still pending
     };
+    $order->akahu_updated_at = $notification->getEmittedAt();
+    $order->save();
 }
 
-http_response_code(200);   // respond within 10 seconds
+http_response_code(200);   // reply within 10 seconds or Akahu retries
 ```
+
+For the full payment (amount, payer details and so on), call `$gateway->fetchTransaction(['transactionReference' => $paymentId])->send()`.
+
+If you leave out `body`, `signature` or `signingKey`, the value is read from the gateway's HTTP request instead, which Omnipay builds from PHP globals by default. That means a bare `acceptNotification()->send()` also works, but passing the values in makes it clear where they come from and is easier to test.
 
 To avoid fetching keys over HTTP (e.g. you cache them yourself), pass them in:
 

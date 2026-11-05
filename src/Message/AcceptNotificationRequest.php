@@ -9,10 +9,19 @@ use Omnipay\Common\Exception\InvalidRequestException;
 /**
  * Verify and parse a one-off payment webhook.
  *
- * Akahu signs the raw body with RSA-SHA256. The signature is in the
- * X-Akahu-Payments-Signature header and the key ID in
- * X-Akahu-Payments-Signing-Key. Public keys are fetched from
- * GET /v1/webhooks/keys/{keyId} unless supplied via webhookPublicKeys.
+ * Pass the webhook's raw body and its two headers:
+ *
+ *     $gateway->acceptNotification([
+ *         'body' => $request->getContent(),
+ *         'signature' => $request->headers->get('X-Akahu-Payments-Signature'),
+ *         'signingKey' => $request->headers->get('X-Akahu-Payments-Signing-Key'),
+ *     ])->send();
+ *
+ * Any of these that are left out are read from the gateway's HTTP request,
+ * which is Omnipay's usual behaviour.
+ *
+ * Akahu signs the raw body with RSA-SHA256. Public keys are fetched from
+ * GET /v1/webhooks/keys/{signingKey} unless supplied via webhookPublicKeys.
  *
  * send() throws InvalidRequestException if the signature is missing or invalid.
  */
@@ -23,6 +32,39 @@ class AcceptNotificationRequest extends AbstractRequest
 
     /** @var array<string, string> Public keys fetched during this process, by key ID. */
     private static array $keyCache = [];
+
+    /** The raw webhook body, exactly as received (before JSON decoding). */
+    public function setBody(?string $value): static
+    {
+        return $this->setParameter('body', $value);
+    }
+
+    public function getBody(): ?string
+    {
+        return $this->getParameter('body') ?? ($this->httpRequest->getContent() ?: null);
+    }
+
+    /** The X-Akahu-Payments-Signature header value. */
+    public function setSignature(?string $value): static
+    {
+        return $this->setParameter('signature', $value);
+    }
+
+    public function getSignature(): ?string
+    {
+        return $this->getParameter('signature') ?? $this->httpRequest->headers->get(self::SIGNATURE_HEADER);
+    }
+
+    /** The X-Akahu-Payments-Signing-Key header value (the key ID). */
+    public function setSigningKey(?string $value): static
+    {
+        return $this->setParameter('signingKey', $value);
+    }
+
+    public function getSigningKey(): ?string
+    {
+        return $this->getParameter('signingKey') ?? $this->httpRequest->headers->get(self::KEY_ID_HEADER);
+    }
 
     /** @param array<string, string> $value [keyId => PEM] */
     public function setWebhookPublicKeys(?array $value): static
@@ -38,9 +80,9 @@ class AcceptNotificationRequest extends AbstractRequest
 
     public function getData(): array
     {
-        $body = $this->httpRequest->getContent();
-        $signature = $this->httpRequest->headers->get(self::SIGNATURE_HEADER);
-        $keyId = $this->httpRequest->headers->get(self::KEY_ID_HEADER);
+        $body = $this->getBody();
+        $signature = $this->getSignature();
+        $keyId = $this->getSigningKey();
 
         if (!$body || !$signature || !$keyId) {
             throw new InvalidRequestException('The webhook is missing its body, signature or signing key header.');
