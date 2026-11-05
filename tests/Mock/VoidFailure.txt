@@ -1,0 +1,4 @@
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+
+{"success":false,"message":"Payment cannot be cancelled","issues":[{"code":"bad_payment_state","message":"Payment is not READY","path":[]}]}

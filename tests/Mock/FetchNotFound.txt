@@ -1,0 +1,4 @@
+HTTP/1.1 404 Not Found
+Content-Type: application/json
+
+{"success":false,"message":"Payment not found","issues":[{"code":"not_found","message":"Payment not found","path":[]}]}

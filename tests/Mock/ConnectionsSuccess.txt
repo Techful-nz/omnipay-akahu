@@ -1,0 +1,4 @@
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{"success":true,"items":[{"_id":"conn_c01234567890123456789012345","bank":"westpac","name":"Westpac","logo":"https://example.com/westpac.png","limits":{"oneoff":[{"value":30000,"type":"single_payment","classification":"strict","description":"Single payment limit"}]}}]}

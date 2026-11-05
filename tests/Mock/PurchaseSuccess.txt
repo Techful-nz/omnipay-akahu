@@ -1,0 +1,4 @@
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{"_id":"one_off_payment_c01234567890123456789012345","authorisation_url":"https://payments.akahu.nz/?payment=one_off_payment_c01234567890123456789012345","expires_at":"2026-11-05T04:00:00.000Z"}

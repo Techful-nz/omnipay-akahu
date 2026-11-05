@@ -1,0 +1,33 @@
+{
+    "name": "techful-nz/omnipay-akahu",
+    "description": "Akahu pay-by-bank (one-off payments) driver for the Omnipay payment processing library",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["omnipay", "payment", "pay by bank", "open banking", "akahu", "nz", "new zealand"],
+    "authors": [{ "name": "Toby Evans", "email": "tobz.nz@gmail.com" }],
+    "require": {
+        "php": "^8.1",
+        "ext-json": "*",
+        "ext-openssl": "*",
+        "omnipay/common": "^3.2"
+    },
+    "require-dev": {
+        "omnipay/tests": "^4.1",
+        "php-http/guzzle7-adapter": "^1.0",
+        "phpunit/phpunit": "^9.6 || ^10.5 || ^11.0"
+    },
+    "autoload": {
+        "psr-4": { "Omnipay\\Akahu\\": "src/" }
+    },
+    "autoload-dev": {
+        "psr-4": { "Omnipay\\Akahu\\Tests\\": "tests/" }
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
+    "config": {
+        "allow-plugins": { "php-http/discovery": true }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
