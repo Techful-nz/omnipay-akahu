@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Omnipay\Akahu\Message;
 
-use Omnipay\Common\Exception\InvalidRequestException;
+use Omnipay\Akahu\Exception\ApiException;
+use Omnipay\Akahu\Exception\InvalidWebhookException;
+use Omnipay\Common\Http\Exception\RequestException;
 use Psr\SimpleCache\CacheInterface;
 
 /**
@@ -24,7 +26,10 @@ use Psr\SimpleCache\CacheInterface;
  * Akahu signs the raw body with RSA-SHA256. Public keys are fetched from
  * GET /v1/webhooks/keys/{signingKey} unless supplied via webhookPublicKeys.
  *
- * send() throws InvalidRequestException if the signature is missing or invalid.
+ * send() throws InvalidWebhookException (an Omnipay InvalidRequestException)
+ * if the webhook can't be trusted: reply with HTTP 400. It throws Omnipay's
+ * RequestException if Akahu's key endpoint fails, e.g. bad credentials: reply
+ * with HTTP 5xx so that Akahu retries.
  */
 class AcceptNotificationRequest extends AbstractRequest
 {
@@ -108,7 +113,7 @@ class AcceptNotificationRequest extends AbstractRequest
         $keyId = $this->getSigningKey();
 
         if (!$body || !$signature || !$keyId) {
-            throw new InvalidRequestException('The webhook is missing its body, signature or signing key header.');
+            throw new InvalidWebhookException('The webhook is missing its body, signature or signing key header.');
         }
 
         $decodedSignature = base64_decode($signature, true);
@@ -117,13 +122,13 @@ class AcceptNotificationRequest extends AbstractRequest
         if ($decodedSignature === false || $publicKey === false
             || openssl_verify($body, $decodedSignature, $publicKey, OPENSSL_ALGO_SHA256) !== 1
         ) {
-            throw new InvalidRequestException('The webhook signature is invalid.');
+            throw new InvalidWebhookException('The webhook signature is invalid.');
         }
 
         $data = json_decode($body, true);
 
         if (!is_array($data)) {
-            throw new InvalidRequestException('The webhook body is not valid JSON.');
+            throw new InvalidWebhookException('The webhook body is not valid JSON.');
         }
 
         return $data;
@@ -154,8 +159,19 @@ class AcceptNotificationRequest extends AbstractRequest
         if (!is_string($publicKey) || $publicKey === '') {
             $result = $this->sendApiRequest('GET', '/webhooks/keys/' . rawurlencode($keyId));
 
-            if ($result['status'] !== 200 || empty($result['body']['publicKey'])) {
-                throw new InvalidRequestException(sprintf('Could not fetch webhook signing key "%s".', $keyId));
+            if ($result['status'] === 404) {
+                throw new InvalidWebhookException(sprintf('The webhook signing key "%s" is unknown.', $keyId));
+            }
+
+            if ($result['status'] >= 400) {
+                throw ApiException::fromResponse($this->getLastApiRequest(), $result['status'], $result['body']);
+            }
+
+            if (!is_string($result['body']['publicKey'] ?? null) || $result['body']['publicKey'] === '') {
+                throw new RequestException(
+                    sprintf('Akahu returned no public key for webhook signing key "%s".', $keyId),
+                    $this->getLastApiRequest(),
+                );
             }
 
             $publicKey = $result['body']['publicKey'];

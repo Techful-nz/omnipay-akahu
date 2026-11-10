@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Omnipay\Akahu\Tests;
 
+use Omnipay\Akahu\Exception\InvalidPaymentStateException;
+use Omnipay\Akahu\Exception\PaymentLimitExceededException;
 use Omnipay\Akahu\Gateway;
 use Omnipay\Akahu\Message\CompletePurchaseRequest;
 use Omnipay\Akahu\Message\FetchConnectionsRequest;
@@ -11,6 +13,7 @@ use Omnipay\Akahu\Message\FetchTransactionRequest;
 use Omnipay\Akahu\Message\PurchaseRequest;
 use Omnipay\Akahu\Message\VoidRequest;
 use Omnipay\Common\Exception\InvalidRequestException;
+use Omnipay\Common\Http\Exception\RequestException;
 use Omnipay\Tests\GatewayTestCase;
 
 class GatewayTest extends GatewayTestCase
@@ -191,6 +194,103 @@ class GatewayTest extends GatewayTestCase
 
         $this->assertFalse($response->isSuccessful());
         $this->assertSame('bad_payment_state', $response->getCode());
+    }
+
+    public function testErrorResponseByDefaultDoesNotThrow(): void
+    {
+        $this->setMockHttpResponse('PurchaseLimitExceeded.txt');
+
+        $response = $this->gateway->purchase([
+            'amount' => '50000.00',
+            'returnUrl' => 'https://example.com/return',
+        ])->send();
+
+        $this->assertFalse($response->isRedirect());
+        $this->assertInstanceOf(PaymentLimitExceededException::class, $response->getException());
+        $this->assertSame('single_limit_exceeded', $response->getException()->getErrorCode());
+    }
+
+    public function testResponseReturnsTheSameException(): void
+    {
+        $this->setMockHttpResponse('FetchNotFound.txt');
+
+        $response = $this->gateway->fetchTransaction(['transactionReference' => self::PAYMENT_ID])->send();
+
+        $this->assertSame($response->getException(), $response->getException());
+
+        try {
+            $response->throw();
+            $this->fail('Expected a RequestException.');
+        } catch (RequestException $e) {
+            $this->assertSame($response->getException(), $e);
+        }
+    }
+
+    public function testResponseThrow(): void
+    {
+        $this->setMockHttpResponse('FetchNotFound.txt');
+
+        $response = $this->gateway->fetchTransaction(['transactionReference' => self::PAYMENT_ID])->send();
+
+        $this->expectException(RequestException::class);
+        $this->expectExceptionMessage('Akahu API request failed with HTTP 404: Payment not found');
+        $response->throw();
+    }
+
+    public function testResponseThrowReturnsSuccessfulResponse(): void
+    {
+        $this->setMockHttpResponse('FetchCancelled.txt');
+
+        $response = $this->gateway->fetchTransaction(['transactionReference' => self::PAYMENT_ID])->send();
+
+        // A cancelled payment is a valid answer from Akahu, not an API error.
+        $this->assertNull($response->getException());
+        $this->assertSame($response, $response->throw());
+    }
+
+    public function testThrowThrowsRequestExceptionForUnauthorized(): void
+    {
+        $this->setMockHttpResponse('Unauthorized.txt');
+
+        try {
+            $this->gateway->fetchTransaction(['transactionReference' => self::PAYMENT_ID])->send()->throw();
+            $this->fail('Expected a RequestException.');
+        } catch (RequestException $e) {
+            $this->assertSame(RequestException::class, $e::class);
+            $this->assertStringContainsString('HTTP 401', $e->getMessage());
+            $this->assertSame('GET', $e->getRequest()->getMethod());
+            $this->assertStringEndsWith('/one-off-payments/' . self::PAYMENT_ID, (string) $e->getRequest()->getUri());
+            $this->assertFalse($e->getRequest()->hasHeader('Authorization'));
+        }
+    }
+
+    public function testThrowThrowsInvalidPaymentStateException(): void
+    {
+        $this->setMockHttpResponse('VoidFailure.txt');
+
+        $this->expectException(InvalidPaymentStateException::class);
+        $this->gateway->void(['transactionReference' => self::PAYMENT_ID])->send()->throw();
+    }
+
+    public function testThrowThrowsRequestExceptionForNonJsonBody(): void
+    {
+        $this->setMockHttpResponse('ServerError.txt');
+
+        $this->expectException(RequestException::class);
+        $this->expectExceptionMessage('HTTP 500');
+        $this->gateway->fetchConnections()->send()->throw();
+    }
+
+    public function testThrowReturnsSuccessfulResponse(): void
+    {
+        $this->setMockHttpResponse('PurchaseSuccess.txt');
+
+        $response = $this->gateway->purchase([
+            'amount' => '10.00',
+            'returnUrl' => 'https://example.com/return',
+        ])->send()->throw();
+
+        $this->assertTrue($response->isRedirect());
     }
 
     public function testFetchConnections(): void

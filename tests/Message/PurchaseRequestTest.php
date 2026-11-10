@@ -6,6 +6,8 @@ namespace Omnipay\Akahu\Tests\Message;
 
 use DateTimeImmutable;
 use DateTimeZone;
+use Omnipay\Akahu\Exception\AkahuException;
+use Omnipay\Akahu\Exception\InvalidParameterException;
 use Omnipay\Akahu\Message\PurchaseRequest;
 use Omnipay\Common\Exception\InvalidRequestException;
 use Omnipay\Tests\TestCase;
@@ -83,25 +85,33 @@ class PurchaseRequestTest extends TestCase
     public static function invalidParameters(): array
     {
         return [
-            'non-NZD currency' => ['setCurrency', 'AUD'],
-            'bad payee account' => ['setPayeeAccountNumber', '123456789'],
-            'payee name too short' => ['setPayeeName', 'A'],
-            'payee name bad chars' => ['setPayeeName', 'Acme <Ltd>'],
-            'reference too long' => ['setPayeeReference', 'ABCDEFGHIJKLM'],
-            'reference bad chars' => ['setPayeeCode', 'INV#1'],
-            'unknown bank' => ['setPayerBank', 'hsbc'],
-            'bad payer account' => ['setPayerAccountNumber', '01-2345'],
-            'amount too large' => ['setAmount', '1000000.01'],
+            'non-NZD currency' => ['setCurrency', 'AUD', 'currency'],
+            'bad payee account' => ['setPayeeAccountNumber', '123456789', 'payeeAccountNumber'],
+            'payee name too short' => ['setPayeeName', 'A', 'payeeName'],
+            'payee name bad chars' => ['setPayeeName', 'Acme <Ltd>', 'payeeName'],
+            'reference too long' => ['setPayeeReference', 'ABCDEFGHIJKLM', 'payeeReference'],
+            'reference bad chars' => ['setPayeeCode', 'INV#1', 'payeeCode'],
+            'unknown bank' => ['setPayerBank', 'hsbc', 'payerBank'],
+            'bad payer account' => ['setPayerAccountNumber', '01-2345', 'payerAccountNumber'],
+            'amount too large' => ['setAmount', '1000000.01', 'amount'],
+            'empty payee name' => ['setPayeeName', '', 'payeeName'],
         ];
     }
 
     #[DataProvider('invalidParameters')]
-    public function testInvalidParameters(string $setter, string $value): void
+    public function testInvalidParameters(string $setter, string $value, string $parameter): void
     {
         $this->request->$setter($value);
 
-        $this->expectException(InvalidRequestException::class);
-        $this->request->getData();
+        try {
+            $this->request->getData();
+            $this->fail('Expected an InvalidParameterException.');
+        } catch (InvalidParameterException $e) {
+            $this->assertSame($parameter, $e->getParameter());
+            $this->assertInstanceOf(AkahuException::class, $e);
+            // Still an Omnipay InvalidRequestException, for existing catch blocks.
+            $this->assertInstanceOf(InvalidRequestException::class, $e);
+        }
     }
 
     public function testReleaseAccountDetailsConflictsWithPayerAccount(): void
@@ -118,7 +128,8 @@ class PurchaseRequestTest extends TestCase
     {
         $this->request->setReturnUrl(null);
 
-        $this->expectException(InvalidRequestException::class);
+        $this->expectException(InvalidParameterException::class);
+        $this->expectExceptionMessage('The returnUrl parameter is required.');
         $this->request->getData();
     }
 }

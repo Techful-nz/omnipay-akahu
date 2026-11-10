@@ -1,0 +1,4 @@
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+
+{"success":false,"message":"Payment exceeds the bank's single payment limit","issues":[{"code":"single_limit_exceeded","message":"Amount exceeds limit","path":["amount"]}]}

@@ -121,11 +121,11 @@ X-Akahu-Payments-Signing-Key: <key id>
 Pass the raw body and the two headers to `acceptNotification()`. `send()` then:
 
 1. Fetches Akahu's public key for the signing-key header and caches it for the life of the PHP process.
-2. Verifies the signature over the raw body. It throws `InvalidRequestException` if verification fails.
+2. Verifies the signature over the raw body. It throws `InvalidWebhookException` if the webhook can't be trusted. That exception extends Omnipay's `InvalidRequestException`.
 3. Returns a `Notification`. `getTransactionReference()` returns `_payment`, the same ID that `purchase()` gave you.
 
 ```php
-use Omnipay\Common\Exception\InvalidRequestException;
+use Omnipay\Akahu\Exception\InvalidWebhookException;
 use Omnipay\Common\Message\NotificationInterface;
 
 // In your webhook endpoint (the notifyUrl). $request is the incoming request,
@@ -137,10 +137,12 @@ try {
         'signature' => $request->headers->get('X-Akahu-Payments-Signature'),
         'signingKey' => $request->headers->get('X-Akahu-Payments-Signing-Key'),
     ])->send();
-} catch (InvalidRequestException $e) {
+} catch (InvalidWebhookException $e) {
     http_response_code(400);   // bad or missing signature: ignore it
     exit;
 }
+// Any other exception (e.g. a RequestException while fetching the key)
+// should give a 5xx so Akahu retries the webhook later.
 
 // Look up the order using the payment ID you stored after purchase().
 $paymentId = $notification->getTransactionReference();   // "one_off_payment_..."
@@ -175,6 +177,49 @@ $gateway->setWebhookPublicKeys(['key_id' => $pem]);
 
 The `status_reason` message is for your logs, not for end users.
 
+## Error handling
+
+As usual with Omnipay, `send()` returns a response even when Akahu returns an error, so check `isSuccessful()` / `isRedirect()`, and `getMessage()`, `getCode()` and `getIssues()` for the details. To use exceptions instead, call `throw()` on the response. It throws, or returns the response if the request succeeded:
+
+```php
+use Omnipay\Akahu\Exception\PaymentLimitExceededException;
+use Omnipay\Common\Http\Exception\RequestException;
+
+try {
+    $response = $gateway->purchase([...])->send()->throw();
+} catch (PaymentLimitExceededException $e) {
+    // Too much for this bank: suggest another payment method.
+} catch (RequestException $e) {
+    // Any other API error, or a network failure (NetworkException).
+    $e->getMessage();   // "Akahu API request failed with HTTP 400: ..."
+}
+```
+
+Akahu error codes worth handling on their own get their own exception. Everything else, such as a 401, 404 or 5xx, throws Omnipay's `RequestException`, the same exception its HTTP client throws, so one `catch (RequestException)` covers API errors and network failures. Its `getRequest()` has the method and URL but not the credentials.
+
+`$response->getException()` returns the same exception without throwing it, or null.
+
+A payment that ends up `FAILED` or `CANCELLED` is not an API error, so `throw()` doesn't throw for it. Check `isSuccessful()` and `getStatus()` for that.
+
+### Retrying
+
+`fetchTransaction()`, `completePurchase()` and `fetchConnections()` are safe to retry after a 429 or 5xx.
+
+You can retry `purchase()` too, but with one side effect. If Akahu returns a 5xx or the connection drops, the payment may already have been created, so a retry can leave a second `READY` payment on Akahu's side. That duplicate can't take money: you never got its `authorisation_url`, so the customer can't approve it, and it is cancelled when it expires (1 hour by default, or `expiresAt`). Only the payment from the successful retry is shown to the customer.
+
+Akahu documents an `Idempotency-Key` header for its enduring payments API but not for one-off payments, so this package doesn't send one.
+
+The package's own exceptions are in `Omnipay\Akahu\Exception` and implement `AkahuException`, which extends Omnipay's `OmnipayException`:
+
+| Exception | When |
+|---|---|
+| `PaymentLimitExceededException` | `single_limit_exceeded` or `bank_limit_exceeded` |
+| `InvalidPaymentStateException` | `bad_payment_state`, e.g. voiding a payment that isn't `READY` |
+| `InvalidParameterException` | A parameter is missing or invalid, e.g. a badly formatted account number. Thrown before anything is sent. `getParameter()` names it. Extends Omnipay's `InvalidRequestException` |
+| `InvalidWebhookException` | Webhook missing headers, bad signature, unknown signing key, or invalid JSON. Extends Omnipay's `InvalidRequestException` |
+
+The first two extend `ApiException`, which extends Omnipay's `RequestException` and adds `getHttpStatusCode()`, `getErrorCode()`, `getIssues()` and `getResponseBody()`. Any other API error, and any network failure, throws Omnipay's `RequestException` or `NetworkException`.
+
 ## Laravel
 
 Laravel auto-discovers the service provider (`Omnipay\Akahu\Laravel\AkahuServiceProvider`). Add your credentials to `.env`:
@@ -197,7 +242,7 @@ Type-hint `Omnipay\Akahu\Gateway` to get a configured gateway. Laravel builds on
 ```php
 use Illuminate\Http\Request;
 use Omnipay\Akahu\Gateway;
-use Omnipay\Common\Exception\InvalidRequestException;
+use Omnipay\Akahu\Exception\InvalidWebhookException;
 
 class AkahuController
 {
@@ -225,7 +270,7 @@ class AkahuController
                 'signature' => $request->header('X-Akahu-Payments-Signature'),
                 'signingKey' => $request->header('X-Akahu-Payments-Signing-Key'),
             ])->send();
-        } catch (InvalidRequestException) {
+        } catch (InvalidWebhookException) {
             abort(400);
         }
 

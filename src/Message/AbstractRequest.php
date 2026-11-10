@@ -4,12 +4,18 @@ declare(strict_types=1);
 
 namespace Omnipay\Akahu\Message;
 
+use Omnipay\Akahu\Exception\InvalidParameterException;
+use Http\Discovery\Psr17FactoryDiscovery;
 use Omnipay\Common\Message\AbstractRequest as BaseAbstractRequest;
+use Psr\Http\Message\RequestInterface as PsrRequest;
 use Psr\Http\Message\ResponseInterface as HttpResponse;
 
 abstract class AbstractRequest extends BaseAbstractRequest
 {
     public const ENDPOINT = 'https://api.payments.akahu.io/v1';
+
+    /** @var array{string, string}|null Method and URL of the last API call. */
+    private ?array $lastApiCall = null;
 
     public function getAppToken(): ?string
     {
@@ -53,6 +59,23 @@ abstract class AbstractRequest extends BaseAbstractRequest
         return $this->setParameter('payeeAccountNumber', $value);
     }
 
+    /**
+     * Omnipay's validate(), but an empty string also counts as missing, and
+     * the exception says which parameter it was.
+     *
+     * @throws InvalidParameterException
+     */
+    public function validate(...$args): void
+    {
+        foreach ($args as $key) {
+            $value = $this->getParameter($key);
+
+            if ($value === null || $value === '') {
+                throw InvalidParameterException::required($key);
+            }
+        }
+    }
+
     public function getEndpoint(): string
     {
         return $this->getParameter('endpoint') ?? self::ENDPOINT;
@@ -82,9 +105,12 @@ abstract class AbstractRequest extends BaseAbstractRequest
             $headers['Content-Type'] = 'application/json';
         }
 
+        $url = rtrim($this->getEndpoint(), '/') . $path;
+        $this->lastApiCall = [$method, $url];
+
         $httpResponse = $this->httpClient->request(
             $method,
-            rtrim($this->getEndpoint(), '/') . $path,
+            $url,
             $headers,
             $body !== null ? json_encode($body, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES) : null,
         );
@@ -93,6 +119,19 @@ abstract class AbstractRequest extends BaseAbstractRequest
             'status' => $httpResponse->getStatusCode(),
             'body' => $this->decode($httpResponse),
         ];
+    }
+
+    /**
+     * The last API call as a PSR-7 request, for exceptions. It has the method
+     * and URL only, so credentials never end up in logs or error reports.
+     */
+    public function getLastApiRequest(): ?PsrRequest
+    {
+        if ($this->lastApiCall === null) {
+            return null;
+        }
+
+        return Psr17FactoryDiscovery::findRequestFactory()->createRequest(...$this->lastApiCall);
     }
 
     private function decode(HttpResponse $response): array

@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Omnipay\Akahu\Message;
 
 use DateTimeInterface;
-use Omnipay\Common\Exception\InvalidRequestException;
+use Omnipay\Akahu\Exception\InvalidParameterException;
 
 /**
  * Create a one-off payment: POST /v1/one-off-payments.
@@ -18,6 +18,9 @@ class PurchaseRequest extends AbstractRequest
     private const ACCOUNT_PATTERN = '/^\d{2}-\d{4}-\d{7}-\d{2,3}$/';
     private const NAME_PATTERN = "/^[A-Za-z0-9 '.,&\\-_]{2,70}$/";
     private const REFERENCE_PATTERN = '/^[A-Za-z0-9 \-_]{0,12}$/';
+    private const NAME_RULE = "it must be 2 to 70 letters, digits, spaces or ' . , & - _";
+    private const ACCOUNT_RULE = 'it must be an NZ bank account number like 12-3456-7890123-00';
+    private const REFERENCE_RULE = 'it must be up to 12 letters, digits, spaces, - or _';
     public const BANKS = ['anz', 'asb', 'bnz', 'kiwibank', 'nzhl', 'westpac', 'demo_bank'];
 
     // Payee (the account receiving funds)
@@ -161,16 +164,16 @@ class PurchaseRequest extends AbstractRequest
 
         $currency = $this->getCurrency();
         if ($currency !== null && $currency !== 'NZD') {
-            throw new InvalidRequestException('Akahu one-off payments only support NZD.');
+            throw InvalidParameterException::invalid('currency', 'Akahu one-off payments only support NZD');
         }
 
         $amount = (float) $this->getAmount();
         if ($amount < 0.01 || $amount > 1000000) {
-            throw new InvalidRequestException('The amount must be between 0.01 and 1,000,000.');
+            throw InvalidParameterException::invalid('amount', 'it must be between 0.01 and 1,000,000');
         }
 
-        $this->assertMatches(self::NAME_PATTERN, $this->getPayeeName(), 'payeeName');
-        $this->assertMatches(self::ACCOUNT_PATTERN, $this->getPayeeAccountNumber(), 'payeeAccountNumber');
+        $this->assertMatches(self::NAME_PATTERN, $this->getPayeeName(), 'payeeName', self::NAME_RULE);
+        $this->assertMatches(self::ACCOUNT_PATTERN, $this->getPayeeAccountNumber(), 'payeeAccountNumber', self::ACCOUNT_RULE);
 
         $data = [
             'amount' => $amount,
@@ -215,21 +218,19 @@ class PurchaseRequest extends AbstractRequest
     {
         $bank = $this->getPayerBank();
         if ($bank !== null && $bank !== '' && !in_array($bank, self::BANKS, true)) {
-            throw new InvalidRequestException(
-                sprintf('The payerBank must be one of: %s.', implode(', ', self::BANKS))
-            );
+            throw InvalidParameterException::invalid('payerBank', 'it must be one of ' . implode(', ', self::BANKS));
         }
 
         if ($this->getPayerAccountNumber()) {
-            $this->assertMatches(self::ACCOUNT_PATTERN, $this->getPayerAccountNumber(), 'payerAccountNumber');
+            $this->assertMatches(self::ACCOUNT_PATTERN, $this->getPayerAccountNumber(), 'payerAccountNumber', self::ACCOUNT_RULE);
 
             if ($this->getReleaseAccountDetails()) {
-                throw new InvalidRequestException('releaseAccountDetails cannot be used with payerAccountNumber.');
+                throw InvalidParameterException::invalid('releaseAccountDetails', 'it cannot be used with payerAccountNumber');
             }
         }
 
         if ($this->getPayerName()) {
-            $this->assertMatches(self::NAME_PATTERN, $this->getPayerName(), 'payerName');
+            $this->assertMatches(self::NAME_PATTERN, $this->getPayerName(), 'payerName', self::NAME_RULE);
         }
 
         return $this->filter([
@@ -254,18 +255,16 @@ class PurchaseRequest extends AbstractRequest
             self::REFERENCE_PATTERN,
             $value,
             $name,
-            'up to 12 letters, digits, spaces, "-" or "_"',
+            self::REFERENCE_RULE,
         );
 
         return $value;
     }
 
-    private function assertMatches(string $pattern, ?string $value, string $name, ?string $hint = null): void
+    private function assertMatches(string $pattern, ?string $value, string $name, string $rule): void
     {
         if ($value === null || !preg_match($pattern, $value)) {
-            throw new InvalidRequestException(
-                sprintf('The %s parameter is invalid%s.', $name, $hint ? " ($hint)" : '')
-            );
+            throw InvalidParameterException::invalid($name, $rule);
         }
     }
 

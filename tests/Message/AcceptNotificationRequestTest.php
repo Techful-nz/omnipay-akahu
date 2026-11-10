@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Omnipay\Akahu\Tests\Message;
 
 use GuzzleHttp\Psr7\Response;
+use Omnipay\Akahu\Exception\InvalidWebhookException;
 use Omnipay\Akahu\Message\AcceptNotificationRequest;
 use Omnipay\Common\Exception\InvalidRequestException;
+use Omnipay\Common\Http\Exception\RequestException;
 use Omnipay\Common\Message\NotificationInterface;
 use Omnipay\Tests\TestCase;
 use Symfony\Component\HttpFoundation\Request as HttpRequest;
@@ -183,13 +185,40 @@ class AcceptNotificationRequestTest extends TestCase
         $this->assertSame(NotificationInterface::STATUS_PENDING, $request->send()->getTransactionStatus());
     }
 
+    public function testUnknownSigningKeyIsRejected(): void
+    {
+        $this->getMockClient()->addResponse(new Response(404, ['Content-Type' => 'application/json'], json_encode([
+            'success' => false,
+            'message' => 'Not found',
+            'issues' => [['code' => 'not_found']],
+        ])));
+
+        $body = $this->body('SENT');
+
+        $this->expectException(InvalidWebhookException::class);
+        $this->makeRequest($body, $this->sign($body), 'key_unknown')->send();
+    }
+
+    public function testKeyFetchAuthFailureThrowsRequestException(): void
+    {
+        $body = $this->body('SENT');
+        $request = $this->makeRequest($body, $this->sign($body), 'key_auth_fail');
+        $this->setMockHttpResponse('Unauthorized.txt');
+
+        // Not an InvalidWebhookException: the webhook may be fine, so the app
+        // should reply 5xx and let Akahu retry once credentials are fixed.
+        $this->expectException(RequestException::class);
+        $this->expectExceptionMessage('HTTP 401');
+        $request->send();
+    }
+
     public function testTamperedBodyIsRejected(): void
     {
         $signature = $this->sign($this->body('FAILED'));
         $request = $this->makeRequest($this->body('SENT'), $signature);
         $request->setWebhookPublicKeys(['key_1' => self::$publicKey]);
 
-        $this->expectException(InvalidRequestException::class);
+        $this->expectException(InvalidWebhookException::class);
         $request->send();
     }
 
@@ -198,7 +227,7 @@ class AcceptNotificationRequestTest extends TestCase
         $request = $this->makeRequest($this->body('SENT'), null);
         $request->setWebhookPublicKeys(['key_1' => self::$publicKey]);
 
-        $this->expectException(InvalidRequestException::class);
+        $this->expectException(InvalidWebhookException::class);
         $request->send();
     }
 }
